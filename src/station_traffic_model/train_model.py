@@ -14,7 +14,7 @@ PREDICTION_HORIZON = 7
 BATCH_SIZE = 32
 
 data = Preprocessor.get_preprocessed_data('../../data/combined_tripdata_since_2023.csv')
-sequences = Preprocessor.get_sequences(data, INPUT_WINDOW, PREDICTION_HORIZON)
+sequences = Preprocessor.create_sequences(data, INPUT_WINDOW)
 
 train_size = int(len(sequences) * 0.8)
 train_sequences = sequences[:train_size]

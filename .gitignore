@@ -1,5 +1,6 @@
 data/
 .idea/
+src/station_traffic_model/saved_models
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
