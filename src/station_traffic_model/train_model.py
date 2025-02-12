@@ -1,92 +1,98 @@
+import joblib
+import numpy as np
 import torch
 import torch.nn as nn
-from ignite.contrib.handlers.tqdm_logger import ProgressBar
-from ignite.engine import Engine, Events
-from ignite.metrics import MeanSquaredError, Loss
-from torch.utils.data import DataLoader
+import torch.optim as optim
+from sklearn.metrics import mean_squared_error, mean_absolute_error
+from torch.utils.data import DataLoader, TensorDataset
 
 from lstm_model import LSTMTrafficModel
 from preprocessor import Preprocessor
-from time_series_dataset import TimeSeriesDataset
 
-INPUT_WINDOW = 30
-PREDICTION_HORIZON = 7
+SEQUENCE_LENGTH = 14
 BATCH_SIZE = 32
 
 data = Preprocessor.get_preprocessed_data('../../data/combined_tripdata_since_2023.csv')
-sequences = Preprocessor.create_sequences(data, INPUT_WINDOW)
 
-train_size = int(len(sequences) * 0.8)
-train_sequences = sequences[:train_size]
-val_sequences = sequences[train_size:]
+x, y = Preprocessor.create_sequences(data, SEQUENCE_LENGTH)
+x_train, y_train, x_val, y_val, x_test, y_test = Preprocessor.split_data(x, y, train_proportion=0.6, val_proportion=0.2)
 
-train_X, train_y = Preprocessor.convert_sequences_to_tensors(train_sequences)
-val_X, val_y = Preprocessor.convert_sequences_to_tensors(val_sequences)
+# Create Datasets and Loaders
+train_dataset = TensorDataset(x_train, y_train)
+val_dataset = TensorDataset(x_val, y_val)
+test_dataset = TensorDataset(x_test, y_test)
 
-train_dataset = TimeSeriesDataset(train_X, train_y)
-val_dataset = TimeSeriesDataset(val_X, val_y)
+train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=False)
+val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False)
+test_loader = DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=False)
 
-train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
-val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE)
+input_size = x_train.shape[2]
+output_size = y_train.shape[1]
+model = LSTMTrafficModel(input_size=input_size, hidden_size=64, num_layers=2, output_size=output_size)
 
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-print(f'Using device: {device}')
-
-model = LSTMTrafficModel(hidden_size=64, num_layers=3, prediction_horizon=PREDICTION_HORIZON).to(device)
 criterion = nn.MSELoss()
-optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+optimizer = optim.Adam(model.parameters(), lr=0.001)
 
+epochs = 5
+best_val_loss = float('inf')
+best_model_state = None
 
-def train_step(engine, batch):
+for epoch in range(epochs):
     model.train()
-    optimizer.zero_grad()
-    x, y = batch
-    x = x.to(device)
-    y = y.to(device)
+    train_loss = 0
+    for inputs, targets in train_loader:
+        outputs = model(inputs)
+        optimizer.zero_grad()
+        loss = criterion(outputs, targets)
+        loss.backward()
+        optimizer.step()
+        train_loss += loss.item() * inputs.size(0)
+    train_loss /= len(train_loader.dataset)
 
-    output = model(x)
-    loss = criterion(output, y)
-    loss.backward()
-    optimizer.step()
-    return loss.item()
-
-
-def val_step(engine, batch):
     model.eval()
+    val_loss = 0
     with torch.no_grad():
-        x, y = batch
-        x = x.to(device)
-        y = y.to(device)
+        for inputs, targets in val_loader:
+            outputs = model(inputs)
+            loss = criterion(outputs, targets)
+            val_loss += loss.item() * inputs.size(0)
+    val_loss /= len(val_loader.dataset)
 
-        output = model(x)
-        loss = criterion(output, y)
-        return output, y
+    print(f'Epoch {epoch + 1}/{epochs}, Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}')
 
+    if val_loss < best_val_loss:
+        best_val_loss = val_loss
+        best_model_state = model.state_dict()
+        torch.save(best_model_state, 'best_model.pth')
 
-trainer = Engine(train_step)
-evaluator = Engine(val_step)
+if best_model_state is not None:
+    model.load_state_dict(best_model_state)
 
-metrics = {
-    'mse': MeanSquaredError(),
-    'loss': Loss(criterion)
-}
+model.eval()
+with torch.no_grad():
+    test_predictions = []
+    test_targets = []
+    for inputs, targets in test_loader:
+        outputs = model(inputs)
+        test_predictions.append(outputs.numpy())
+        test_targets.append(targets.numpy())
 
-for name, metric in metrics.items():
-    metric.attach(evaluator, name)
+test_predictions = np.concatenate(test_predictions, axis=0)
+test_targets = np.concatenate(test_targets, axis=0)
 
-# Add progress bar
-ProgressBar().attach(trainer, output_transform=lambda x: {'loss': x})
+scaler_check_out = joblib.load('saved_models/scalers/scaler_check_out.save')
+scaler_check_in = joblib.load('saved_models/scalers/scaler_check_in.save')
+check_out_predictions = scaler_check_out.inverse_transform(test_predictions[:, 0].reshape(-1, 1))
+check_in_predictions = scaler_check_in.inverse_transform(test_predictions[:, 1].reshape(-1, 1))
 
+check_out_targets = scaler_check_out.inverse_transform(test_targets[:, 0].reshape(-1, 1))
+check_in_targets = scaler_check_in.inverse_transform(test_targets[:, 1].reshape(-1, 1))
 
-@trainer.on(Events.EPOCH_COMPLETED)
-def log_validation_results(trainer):
-    evaluator.run(val_loader)
-    metrics = evaluator.state.metrics
-    mse = metrics['mse']
-    val_loss = metrics['loss']
-    print(f"Validation Results - Epoch: {trainer.state.epoch}  Avg loss: {val_loss:.4f} Avg MSE: {mse:.4f}")
+rmse_check_out = np.sqrt(mean_squared_error(check_out_targets, check_out_predictions))
+mae_check_out = mean_absolute_error(check_out_targets, check_out_predictions)
 
+rmse_check_in = np.sqrt(mean_squared_error(check_in_targets, check_in_predictions))
+mae_check_in = mean_absolute_error(check_in_targets, check_in_predictions)
 
-num_epochs = 20
-
-trainer.run(train_loader, max_epochs=num_epochs)
+print(f'Check-Out Counts - RMSE: {rmse_check_out}, MAE: {mae_check_out}')
+print(f'Check-In Counts - RMSE: {rmse_check_in}, MAE: {mae_check_in}')
