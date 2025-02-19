@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 import torch
+import torch.utils.data as data_utils
 from sklearn.preprocessing import MinMaxScaler
 from tqdm import tqdm
 
@@ -29,6 +30,17 @@ class Preprocessor:
         self.x_test_tensor = None
         self.y_test_tensor = None
 
+    def preprocess_data(self, data_path):
+        self.load_data(data_path)
+        self.standardize_coordinates()
+        self.convert_dates()
+        self.compute_daily_counts()
+        self.encode_dates()
+        self.split_data()
+        self.scale_features()
+        self.create_sequences()
+        self.get_tensors()
+
     def load_data(self, csv_file_path):
         self.data = pd.read_csv(csv_file_path)
         print(f"Data loaded successfully with shape {self.data.shape}.")
@@ -39,7 +51,8 @@ class Preprocessor:
         print("Converted 'started_at' and 'ended_at' to dates.")
 
     def compute_daily_counts(self):
-        check_outs = self.data.groupby(['start_station_id', 'start_lat', 'start_lng', 'start_date']).size().reset_index(name='check_out_count')
+        check_outs = self.data.groupby(['start_station_id', 'start_lat', 'start_lng', 'start_date']).size().reset_index(
+            name='check_out_count')
         check_ins = self.data.groupby(['end_station_id', 'end_date']).size().reset_index(name='check_in_count')
 
         check_outs.rename(columns={'start_station_id': 'station_id', 'start_date': 'date'}, inplace=True)
@@ -204,3 +217,13 @@ class Preprocessor:
         self.y_test_tensor = torch.tensor(self.y_test, dtype=torch.float32)
 
         print("Data converted to PyTorch tensors.")
+
+    def get_loaders(self, batch_size):
+        train_dataset = data_utils.TensorDataset(self.x_train_tensor, self.y_train_tensor)
+        val_dataset = data_utils.TensorDataset(self.x_val_tensor, self.y_val_tensor)
+        test_dataset = data_utils.TensorDataset(self.x_test_tensor, self.y_test_tensor)
+        train_loader = data_utils.DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+        val_loader = data_utils.DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
+        test_loader = data_utils.DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+
+        return train_loader, val_loader, test_loader
