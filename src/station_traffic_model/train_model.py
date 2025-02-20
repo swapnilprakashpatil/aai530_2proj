@@ -10,13 +10,13 @@ from station_traffic_model import StationTrafficModel
 
 DATA_PATH = "../../data/combined_tripdata_2020.csv"
 INPUT_SEQUENCE_LENGTH = 30
-OUTPUT_SEQUENCE_LENGTH = 7
+OUTPUT_SEQUENCE_LENGTH = 2
 
-PATIENCE = 5
+PATIENCE = 3
 NUM_EPOCHS = 20
 
 PERFORM_TUNING = True
-NUM_TRIALS = 30
+NUM_TRIALS = 20
 params = {
     'model_type': 'lstm',
     'hidden_size': 128,

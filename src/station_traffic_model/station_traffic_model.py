@@ -117,6 +117,6 @@ class StationTrafficModel(nn.Module):
 
         best_model_path = checkpoint_handler.last_checkpoint
         if best_model_path:
-            self.load_state_dict(torch.load(best_model_path)['model'])
+            self.load_state_dict(torch.load(best_model_path))
 
         return self, history

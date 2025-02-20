@@ -9,12 +9,12 @@ from station_traffic_model import StationTrafficModel
 def objective(trial, x_train_tensor, y_train_tensor, x_val_tensor, y_val_tensor, output_sequence_length, patience,
               num_epochs, device):
     model_type = trial.suggest_categorical('model_type', ['lstm', 'gru'])
-    hidden_size = trial.suggest_int('hidden_size', 32, 256, step=32)
-    num_layers = trial.suggest_int('num_layers', 1, 3)
-    dropout = trial.suggest_float('dropout', 0.0, 0.5, step=0.1)
-    learning_rate = trial.suggest_float('learning_rate', 1e-4, 1e-1)
-    batch_size = trial.suggest_categorical('batch_size', [32, 64, 128])
-    weight_decay = trial.suggest_float('weight_decay', 0.0, 0.01, step=0.001)
+    hidden_size = trial.suggest_categorical('hidden_size', [16, 32, 64, 128, 256])
+    num_layers = trial.suggest_int('num_layers', 1, 4)
+    dropout = trial.suggest_float('dropout', 0.0, 0.5, step=0.05)
+    learning_rate = trial.suggest_float('learning_rate', 1e-5, 1e-1)
+    batch_size = trial.suggest_categorical('batch_size', [8, 16, 32, 64, 128, 256])
+    weight_decay = trial.suggest_float('weight_decay', 1e-6, 1e-1, log=True)
 
     train_dataset = data_utils.TensorDataset(x_train_tensor, y_train_tensor)
     val_dataset = data_utils.TensorDataset(x_val_tensor, y_val_tensor)
