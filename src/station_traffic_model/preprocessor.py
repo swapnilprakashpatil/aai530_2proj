@@ -3,7 +3,7 @@ import pandas as pd
 import torch
 import torch.utils.data as data_utils
 from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import LabelEncoder
+from sklearn.preprocessing import LabelEncoder, StandardScaler
 from tqdm import tqdm
 
 
@@ -65,13 +65,15 @@ class Preprocessor:
         # Split data
         train, x_temp = train_test_split(data, train_size=train_proportion, shuffle=False)
         val, test = train_test_split(x_temp, train_size=validation_proportion / (1 - train_proportion), shuffle=False)
+        scaler = StandardScaler()
+        scaler.fit(train.drop('date', axis=1))
 
         # Create sequences
-        x_train, y_train = self.create_sequences(train, seq_length=input_sequence_length,
+        x_train, y_train = self.create_sequences(train, scaler, seq_length=input_sequence_length,
                                                  target_length=output_sequence_length)
-        x_val, y_val = self.create_sequences(val, seq_length=input_sequence_length,
+        x_val, y_val = self.create_sequences(val, scaler, seq_length=input_sequence_length,
                                              target_length=output_sequence_length)
-        x_test, y_test = self.create_sequences(test, seq_length=input_sequence_length,
+        x_test, y_test = self.create_sequences(test, scaler, seq_length=input_sequence_length,
                                                target_length=output_sequence_length)
 
         # Convert to tensors
@@ -80,14 +82,15 @@ class Preprocessor:
         self.test_dataset = data_utils.TensorDataset(torch.FloatTensor(x_test), torch.FloatTensor(y_test))
 
     @staticmethod
-    def create_sequences(data: pd.DataFrame, seq_length: int, target_length: int):
+    def create_sequences(data: pd.DataFrame, scaler: StandardScaler, seq_length: int, target_length: int):
         x, y = [], []
         station_ids = data['station_id'].unique()
         for station_id in tqdm(station_ids):
             x_data = data[data['station_id'] == station_id].sort_values('date', ascending=True)
             x_data.drop(['date'], axis=1, inplace=True)
             y_data = x_data[['count']]
-            x_values = x_data.values
+
+            x_values = scaler.transform(x_data)
             y_values = y_data.values
 
             for i in range(len(x_data) - seq_length - target_length + 1):
