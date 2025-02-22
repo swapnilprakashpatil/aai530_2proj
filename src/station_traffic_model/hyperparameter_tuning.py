@@ -28,7 +28,7 @@ def objective(trial, x_train_tensor, y_train_tensor, x_val_tensor, y_val_tensor,
 
     model.train_model(criterion, optimizer, train_loader, val_loader, num_epochs, patience, device)
     evaluator = ModelEvaluator(model)
-    check_in_targets, check_in_predictions, check_out_targets, check_out_predictions = evaluator.evaluate(val_loader)
-    metrics = evaluator.calculate_metrics(check_in_targets, check_in_predictions, check_out_targets,
-                                          check_out_predictions)
-    return metrics['check_out']['rmse'] + metrics['check_in']['rmse']
+    targets, predictions = evaluator.evaluate(val_loader)
+    metrics = evaluator.calculate_metrics(targets, predictions)
+
+    return metrics['mse']

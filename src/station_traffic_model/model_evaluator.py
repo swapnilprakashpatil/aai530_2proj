@@ -1,92 +1,97 @@
-import joblib
 import matplotlib.pyplot as plt
 import numpy as np
-import seaborn as sns
 import torch
+from ignite.engine import Engine
+from ignite.metrics import MeanSquaredError, RootMeanSquaredError, MeanAbsoluteError
 from sklearn.metrics import mean_squared_error, mean_absolute_error
-from torch.utils.data import DataLoader
 
 
 class ModelEvaluator:
     def __init__(self, model):
         self.model = model
+        self.device = next(model.parameters()).device
 
-    def evaluate(self, test_loader: DataLoader):
+    def create_evaluator(self):
+
+        def evaluation_step(engine, batch):
+            self.model.eval()
+            with torch.no_grad():
+                x, y = batch
+                x = x.to(self.device)
+                y = y.to(self.device)
+                y_pred = self.model(x)
+                return y_pred, y
+
+        evaluator = Engine(evaluation_step)
+
+        metrics = {
+            'mse': MeanSquaredError(),
+            'rmse': RootMeanSquaredError(),
+            'mae': MeanAbsoluteError()
+        }
+
+        for name, metric in metrics.items():
+            metric.attach(evaluator, name)
+
+        return evaluator
+
+    def evaluate(self, test_loader):
         self.model.eval()
-        device = next(self.model.parameters()).device
+        predictions = []
+        targets = []
+
+        evaluator = self.create_evaluator()
+        evaluator.run(test_loader)
 
         with torch.no_grad():
-            test_predictions = []
-            test_targets = []
-            for inputs, targets in test_loader:
-                inputs = inputs.to(device)
-                outputs = self.model(inputs)
-                test_predictions.append(outputs.cpu().numpy())
-                test_targets.append(targets.numpy())
+            for x, y in test_loader:
+                x = x.to(self.device)
+                y_pred = self.model(x)
+                predictions.append(y_pred.cpu().numpy())
+                targets.append(y.numpy())
 
-        test_predictions = np.concatenate(test_predictions, axis=0)
-        test_targets = np.concatenate(test_targets, axis=0)
+        predictions = np.concatenate(predictions)
+        targets = np.concatenate(targets)
 
-        scaler_check_out = joblib.load('saved_models/scalers/scaler_check_out.save')
-        scaler_check_in = joblib.load('saved_models/scalers/scaler_check_in.save')
-        check_out_predictions = scaler_check_out.inverse_transform(test_predictions[:, 0].reshape(-1, 1))
-        check_in_predictions = scaler_check_in.inverse_transform(test_predictions[:, 1].reshape(-1, 1))
+        return targets, predictions
 
-        check_out_targets = scaler_check_out.inverse_transform(test_targets[:, 0].reshape(-1, 1))
-        check_in_targets = scaler_check_in.inverse_transform(test_targets[:, 1].reshape(-1, 1))
+    def calculate_metrics(self, targets, predictions):
+        targets_2d = targets.reshape(-1, targets.shape[-1])
+        predictions_2d = predictions.reshape(-1, predictions.shape[-1])
 
-        return check_in_targets, check_in_predictions, check_out_targets, check_out_predictions
+        mse = mean_squared_error(targets_2d, predictions_2d)
+        rmse = np.sqrt(mse)
+        mae = mean_absolute_error(targets_2d, predictions_2d)
 
-    def calculate_metrics(self, check_in_targets, check_in_predictions, check_out_targets, check_out_predictions):
         metrics = {
-            'check_out': {
-                'rmse': np.sqrt(mean_squared_error(check_out_targets, check_out_predictions)),
-                'mae': mean_absolute_error(check_out_targets, check_out_predictions)
-            },
-            'check_in': {
-                'rmse': np.sqrt(mean_squared_error(check_in_targets, check_in_predictions)),
-                'mae': mean_absolute_error(check_in_targets, check_in_predictions)
-            }
+            'mse': mse,
+            'rmse': rmse,
+            'mae': mae
         }
+
+        print("\nModel Evaluation Metrics:")
+        for metric_name, value in metrics.items():
+            print(f"{metric_name}: {value:.4f}")
+
         return metrics
 
-    def plot_predictions(self, check_in_targets, check_in_predictions, check_out_targets, check_out_predictions):
-        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8))
+    def plot_predictions(self, targets, predictions):
+        plt.figure(figsize=(10, 6))
 
-        ax1.scatter(check_out_targets, check_out_predictions, alpha=0.5)
-        max_val = max(check_out_targets.max(), check_out_predictions.max())
-        min_val = min(check_out_targets.min(), check_out_predictions.min())
-        ax1.plot([min_val, max_val], [min_val, max_val], 'r--', label='Perfect Prediction')
-        ax1.set_title('Check-Out Predictions vs Actual')
-        ax1.set_xlabel('Actual Values')
-        ax1.set_ylabel('Predicted Values')
-        ax1.legend()
+        targets_flat = targets.reshape(-1)
+        predictions_flat = predictions.reshape(-1)
 
-        ax2.scatter(check_in_targets, check_in_predictions, alpha=0.5)
-        max_val = max(check_in_targets.max(), check_in_predictions.max())
-        min_val = min(check_in_targets.min(), check_in_predictions.min())
-        ax2.plot([min_val, max_val], [min_val, max_val], 'r--', label='Perfect Prediction')
-        ax2.set_title('Check-In Predictions vs Actual')
-        ax2.set_xlabel('Actual Values')
-        ax2.set_ylabel('Predicted Values')
-        ax2.legend()
+        plt.scatter(targets_flat, predictions_flat, alpha=0.5, s=1)
 
-        plt.tight_layout()
-        plt.show()
+        max_val = max(targets_flat.max(), predictions_flat.max())
+        min_val = min(targets_flat.min(), predictions_flat.min())
+        plt.plot([min_val, max_val], [min_val, max_val], 'r--', label='Perfect Prediction')
 
-    def plot_error_distribution(self, check_in_targets, check_in_predictions, check_out_targets, check_out_predictions):
-        check_out_errors = check_out_predictions - check_out_targets
-        check_in_errors = check_in_predictions - check_in_targets
-
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4))
-
-        sns.histplot(check_out_errors, ax=ax1, kde=True)
-        ax1.set_title('Check-Out Error Distribution')
-        ax1.set_xlabel('Error')
-
-        sns.histplot(check_in_errors, ax=ax2, kde=True)
-        ax2.set_title('Check-In Error Distribution')
-        ax2.set_xlabel('Error')
+        plt.xlabel('Actual Values')
+        plt.ylabel('Predicted Values')
+        plt.title('Predicted vs Actual Values')
+        plt.legend()
+        plt.grid(True)
 
         plt.tight_layout()
         plt.show()

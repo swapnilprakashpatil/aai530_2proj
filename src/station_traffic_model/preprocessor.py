@@ -47,19 +47,16 @@ class Preprocessor:
 
     def convert_dates(self):
         self.data['start_date'] = pd.to_datetime(self.data['started_at'], errors='coerce').dt.date
-        self.data['end_date'] = pd.to_datetime(self.data['ended_at'], errors='coerce').dt.date
         print("Converted 'started_at' and 'ended_at' to dates.")
 
     def compute_daily_counts(self):
-        check_outs = self.data.groupby(['start_station_id', 'start_lat', 'start_lng', 'start_date']).size().reset_index(
+        self.daily_counts = self.data.groupby(
+            ['start_station_id', 'start_lat', 'start_lng', 'start_date']).size().reset_index(
             name='check_out_count')
-        check_ins = self.data.groupby(['end_station_id', 'end_date']).size().reset_index(name='check_in_count')
-
-        check_outs.rename(columns={'start_station_id': 'station_id', 'start_date': 'date'}, inplace=True)
-        check_ins.rename(columns={'end_station_id': 'station_id', 'end_date': 'date'}, inplace=True)
-
-        self.daily_counts = pd.merge(check_outs, check_ins, on=['station_id', 'date'], how='outer')
         self.daily_counts.fillna(0, inplace=True)
+        self.daily_counts = self.daily_counts.rename(
+            columns={'start_date': 'date', 'start_station_id': 'station_id'})
+
         print(f"Computed daily counts with shape {self.daily_counts.shape}.")
 
     def standardize_coordinates(self):
@@ -122,7 +119,7 @@ class Preprocessor:
 
     def scale_features(self):
         features_to_scale = [
-            'check_in_count', 'check_out_count',
+            'check_out_count',
             'day_of_week_sin', 'day_of_week_cos',
             'day_of_month_sin', 'day_of_month_cos',
             'month_sin', 'month_cos', 'start_lat', 'start_lng',
@@ -143,12 +140,12 @@ class Preprocessor:
 
     def create_sequences(self):
         features = [
-            'check_in_count', 'check_out_count',
+            'check_out_count',
             'day_of_week_sin', 'day_of_week_cos',
             'day_of_month_sin', 'day_of_month_cos',
             'month_sin', 'month_cos', 'start_lat', 'start_lng'
         ]
-        target = ['check_in_count', 'check_out_count']
+        target = ['check_out_count']
 
         x_train, y_train = [], []
         x_val, y_val = [], []

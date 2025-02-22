@@ -1,6 +1,7 @@
 data/
 .idea/
 src/station_traffic_model/saved_models
+src/station_traffic_model/checkpoints
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

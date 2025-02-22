@@ -8,15 +8,15 @@ from model_evaluator import ModelEvaluator
 from preprocessor import Preprocessor
 from station_traffic_model import StationTrafficModel
 
-DATA_PATH = "../../data/combined_tripdata_2020.csv"
+DATA_PATH = "../../data/combined_tripdata.csv"
 INPUT_SEQUENCE_LENGTH = 30
-OUTPUT_SEQUENCE_LENGTH = 2
+OUTPUT_SEQUENCE_LENGTH = 1
 
 PATIENCE = 3
 NUM_EPOCHS = 20
 
 PERFORM_TUNING = True
-NUM_TRIALS = 20
+NUM_TRIALS = 15
 params = {
     'model_type': 'lstm',
     'hidden_size': 128,
@@ -56,6 +56,6 @@ model.train_model(criterion, optimizer, train_loader, val_loader, NUM_EPOCHS, PA
 
 # Evaluation
 evaluator = ModelEvaluator(model)
-check_in_targets, check_in_predictions, check_out_targets, check_out_predictions = evaluator.evaluate(test_loader)
-evaluator.calculate_metrics(check_in_targets, check_in_predictions, check_out_targets, check_out_predictions)
-evaluator.plot_predictions(check_in_targets, check_in_predictions, check_out_targets, check_out_predictions)
+targets, predictions = evaluator.evaluate(test_loader)
+metrics = evaluator.calculate_metrics(targets, predictions)
+evaluator.plot_predictions(targets, predictions)
