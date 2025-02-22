@@ -103,7 +103,7 @@ class StationTrafficModel(nn.Module):
             metrics = evaluator.state.metrics
             train_loss = metrics['loss']
             history['train_loss'].append(train_loss)
-            pbar.log_message(f"Epoch [{engine.state.epoch}/{num_epochs}] Train Loss: {train_loss:.4f}")
+            pbar.log_message(f"Epoch [{engine.state.epoch}/{num_epochs}] Train Loss: {train_loss}")
 
         @trainer.on(Events.EPOCH_COMPLETED)
         def log_validation_results(engine):
@@ -111,7 +111,7 @@ class StationTrafficModel(nn.Module):
             metrics = evaluator.state.metrics
             val_loss = metrics['loss']
             history['val_loss'].append(val_loss)
-            pbar.log_message(f"Epoch [{engine.state.epoch}/{num_epochs}] Validation Loss: {val_loss:.4f}")
+            pbar.log_message(f"Epoch [{engine.state.epoch}/{num_epochs}] Validation Loss: {val_loss}")
 
         trainer.run(train_loader, max_epochs=num_epochs)
 

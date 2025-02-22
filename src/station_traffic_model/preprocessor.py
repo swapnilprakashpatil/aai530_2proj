@@ -2,225 +2,103 @@ import numpy as np
 import pandas as pd
 import torch
 import torch.utils.data as data_utils
-from sklearn.preprocessing import MinMaxScaler
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import LabelEncoder
 from tqdm import tqdm
 
 
 class Preprocessor:
-    def __init__(self, input_sequence_length, output_sequence_length):
-        self.input_sequence_length = input_sequence_length
-        self.output_sequence_length = output_sequence_length
-        self.data = None
-        self.daily_counts = None
-        self.station_to_index = {}
-        self.scaler = None
-        self.station_sequences = {}
+    MINIMUM_TRAIN_DAYS = 60
 
-        self.x_train = None
-        self.y_train = None
-        self.x_val = None
-        self.y_val = None
-        self.x_test = None
-        self.y_test = None
+    columns_to_load = [
+        'started_at', 'start_station_id', 'start_lat', 'start_lng',
+    ]
+    date_columns = ['started_at']
 
-        self.x_train_tensor = None
-        self.y_train_tensor = None
-        self.x_val_tensor = None
-        self.y_val_tensor = None
-        self.x_test_tensor = None
-        self.y_test_tensor = None
+    train_dataset = None
+    val_dataset = None
+    test_dataset = None
 
-    def preprocess_data(self, data_path):
-        self.load_data(data_path)
-        self.standardize_coordinates()
-        self.convert_dates()
-        self.compute_daily_counts()
-        self.encode_dates()
-        self.split_data()
-        self.scale_features()
-        self.create_sequences()
-        self.get_tensors()
+    def preprocess_data(self, data_path: str, train_proportion: float = 0.6,
+                        validation_proportion: float = 0.2,
+                        input_sequence_length: int = 30, output_sequence_length: int = 1):
+        # Load Data
+        data = pd.read_csv(data_path, usecols=self.columns_to_load, parse_dates=self.date_columns)
+        data['start_station_id'] = data['start_station_id'].astype('string')
+        data['date'] = pd.to_datetime(data['started_at'], errors='coerce').dt.date
+        data.rename(columns={'start_station_id': 'station_id', 'start_lat': 'latitude', 'start_lng': 'longitude'},
+                    inplace=True)
+        print(f'Empty values: {data.isna().sum()}')
+        data.dropna(inplace=True)
 
-    def load_data(self, csv_file_path):
-        self.data = pd.read_csv(csv_file_path)
-        print(f"Data loaded successfully with shape {self.data.shape}.")
+        # Standardize coordinates
+        station_coords = data.groupby('station_id').agg({'latitude': 'median', 'longitude': 'median'}).reset_index()
+        data = data.merge(station_coords, on='station_id', how='left', suffixes=('_orig', ''))
+        data.drop(['latitude_orig', 'longitude_orig'], axis=1, inplace=True)
 
-    def convert_dates(self):
-        self.data['start_date'] = pd.to_datetime(self.data['started_at'], errors='coerce').dt.date
-        print("Converted 'started_at' and 'ended_at' to dates.")
+        # Group to get counts
+        data = data.groupby(['station_id', 'latitude', 'longitude', 'date']).size().reset_index(name='count')
 
-    def compute_daily_counts(self):
-        self.daily_counts = self.data.groupby(
-            ['start_station_id', 'start_lat', 'start_lng', 'start_date']).size().reset_index(
-            name='check_out_count')
-        self.daily_counts.fillna(0, inplace=True)
-        self.daily_counts = self.daily_counts.rename(
-            columns={'start_date': 'date', 'start_station_id': 'station_id'})
+        # Encoding
+        label_encoder = LabelEncoder()
+        data['station_id'] = label_encoder.fit_transform(data['station_id'])
 
-        print(f"Computed daily counts with shape {self.daily_counts.shape}.")
+        data['date'] = pd.to_datetime(data['date'])
+        data['day_of_week'] = data['date'].dt.weekday
+        data['day_of_month'] = data['date'].dt.day
+        data['month'] = data['date'].dt.month
+        data['day_of_week_sin'] = np.sin(2 * np.pi * data['day_of_week'] / 7)
+        data['day_of_week_cos'] = np.cos(2 * np.pi * data['day_of_week'] / 7)
+        data['day_of_month_sin'] = np.sin(2 * np.pi * data['day_of_month'] / 31)
+        data['day_of_month_cos'] = np.cos(2 * np.pi * data['day_of_month'] / 31)
+        data['month_sin'] = np.sin(2 * np.pi * data['month'] / 12)
+        data['month_cos'] = np.cos(2 * np.pi * data['month'] / 12)
+        data.drop(['day_of_week', 'day_of_month', 'month'], axis=1, inplace=True)
 
-    def standardize_coordinates(self):
-        station_coords = self.data.groupby('start_station_id').agg({
-            'start_lat': 'median',
-            'start_lng': 'median'
-        }).reset_index()
+        # Remove stations outside training
+        train_rows = int(len(data) * train_proportion)
+        train_subset = data.iloc[:train_rows]
+        train_subset = train_subset.groupby('station_id').size().reset_index(name='count')
+        station_ids_to_include = train_subset[train_subset['count'] > 60]['station_id'].tolist()
+        data = data[data['station_id'].isin(station_ids_to_include)]
 
-        self.data = self.data.merge(
-            station_coords,
-            on='start_station_id',
-            how='left',
-            suffixes=('_orig', '')
-        )
-        self.data.drop(['start_lat_orig', 'start_lng_orig'], axis=1, inplace=True)
-        print("Coordinates standardized using median values per station.")
+        # Split data
+        train, x_temp = train_test_split(data, train_size=train_proportion, shuffle=False)
+        val, test = train_test_split(x_temp, train_size=validation_proportion / (1 - train_proportion), shuffle=False)
 
-    def encode_dates(self):
-        self.daily_counts['date'] = pd.to_datetime(self.daily_counts['date'])
+        # Create sequences
+        x_train, y_train = self.create_sequences(train, seq_length=input_sequence_length,
+                                                 target_length=output_sequence_length)
+        x_val, y_val = self.create_sequences(val, seq_length=input_sequence_length,
+                                             target_length=output_sequence_length)
+        x_test, y_test = self.create_sequences(test, seq_length=input_sequence_length,
+                                               target_length=output_sequence_length)
 
-        self.daily_counts['day_of_week'] = self.daily_counts['date'].dt.weekday
-        self.daily_counts['day_of_month'] = self.daily_counts['date'].dt.day
-        self.daily_counts['month'] = self.daily_counts['date'].dt.month
+        # Convert to tensors
+        self.train_dataset = data_utils.TensorDataset(torch.FloatTensor(x_train), torch.FloatTensor(y_train))
+        self.val_dataset = data_utils.TensorDataset(torch.FloatTensor(x_val), torch.FloatTensor(y_val))
+        self.test_dataset = data_utils.TensorDataset(torch.FloatTensor(x_test), torch.FloatTensor(y_test))
 
-        self.daily_counts['day_of_week_sin'] = np.sin(2 * np.pi * self.daily_counts['day_of_week'] / 7)
-        self.daily_counts['day_of_week_cos'] = np.cos(2 * np.pi * self.daily_counts['day_of_week'] / 7)
-        self.daily_counts['day_of_month_sin'] = np.sin(2 * np.pi * self.daily_counts['day_of_month'] / 31)
-        self.daily_counts['day_of_month_cos'] = np.cos(2 * np.pi * self.daily_counts['day_of_month'] / 31)
-        self.daily_counts['month_sin'] = np.sin(2 * np.pi * self.daily_counts['month'] / 12)
-        self.daily_counts['month_cos'] = np.cos(2 * np.pi * self.daily_counts['month'] / 12)
+    @staticmethod
+    def create_sequences(data: pd.DataFrame, seq_length: int, target_length: int):
+        x, y = [], []
+        station_ids = data['station_id'].unique()
+        for station_id in tqdm(station_ids):
+            x_data = data[data['station_id'] == station_id].sort_values('date', ascending=True)
+            x_data.drop(['date'], axis=1, inplace=True)
+            y_data = x_data[['count']]
+            x_values = x_data.values
+            y_values = y_data.values
 
-        print("Date features encoded cyclically.")
+            for i in range(len(x_data) - seq_length - target_length + 1):
+                x.append(x_values[i:(i + seq_length)])
+                y.append(y_values[(i + seq_length):(i + seq_length + target_length)])
 
-    def split_data(self):
-        train_ratio = 0.6
-        val_ratio = 0.2
+        return np.array(x), np.array(y)
 
-        stations = self.daily_counts['station_id'].unique()
-
-        for station in stations:
-            station_df = self.daily_counts[self.daily_counts['station_id'] == station].copy()
-            station_df.sort_values('date', inplace=True)
-
-            total_days = len(station_df)
-            if total_days > 90:
-                train_end = int(train_ratio * total_days)
-                val_end = int((train_ratio + val_ratio) * total_days)
-
-                train_data = station_df.iloc[:train_end]
-                val_data = station_df.iloc[train_end:val_end]
-                test_data = station_df.iloc[val_end:]
-
-                self.station_sequences[station] = {
-                    'train': train_data,
-                    'val': val_data,
-                    'test': test_data
-                }
-
-        print("Data split into train, validation, and test sets per station.")
-
-    def scale_features(self):
-        features_to_scale = [
-            'check_out_count',
-            'day_of_week_sin', 'day_of_week_cos',
-            'day_of_month_sin', 'day_of_month_cos',
-            'month_sin', 'month_cos', 'start_lat', 'start_lng',
-        ]
-
-        all_train_data = pd.concat([seq['train'] for seq in self.station_sequences.values()])
-        self.scaler = MinMaxScaler()
-        self.scaler.fit(all_train_data[features_to_scale])
-
-        for station, datasets in self.station_sequences.items():
-            for split_name in ['train', 'val', 'test']:
-                data = datasets[split_name]
-                data_scaled = data.copy()
-                data_scaled[features_to_scale] = self.scaler.transform(data[features_to_scale])
-                datasets[split_name] = data_scaled
-
-        print("Features scaled using MinMaxScaler.")
-
-    def create_sequences(self):
-        features = [
-            'check_out_count',
-            'day_of_week_sin', 'day_of_week_cos',
-            'day_of_month_sin', 'day_of_month_cos',
-            'month_sin', 'month_cos', 'start_lat', 'start_lng'
-        ]
-        target = ['check_out_count']
-
-        x_train, y_train = [], []
-        x_val, y_val = [], []
-        x_test, y_test = [], []
-
-        for station, datasets in tqdm(self.station_sequences.items(), desc='Processing station sequences.'):
-            for split_name in ['train', 'val', 'test']:
-                data = datasets[split_name].reset_index(drop=True)
-                input_data = data[features].values
-                output_data = data[target].values
-
-                total_length = self.input_sequence_length + self.output_sequence_length
-                n_sequences = len(data) - total_length + 1
-                n_input_features = len(features)
-                n_output_features = len(target)
-
-                if n_sequences < 1:
-                    print(f"DataFrame for station {station} is too short to create any complete sequences")
-                    continue
-
-                input_stride = input_data.strides[0]
-                input_shape = (n_sequences, self.input_sequence_length, n_input_features)
-                input_strides = (input_stride, input_stride, input_data.strides[1])
-                inputs = np.lib.stride_tricks.as_strided(
-                    input_data,
-                    shape=input_shape,
-                    strides=input_strides,
-                    writeable=False
-                )
-
-                output_stride = output_data.strides[0]
-                output_shape = (n_sequences, self.output_sequence_length, n_output_features)
-                output_strides = (output_stride, output_stride, output_data.strides[1])
-                outputs = np.lib.stride_tricks.as_strided(
-                    output_data[self.input_sequence_length:],
-                    shape=output_shape,
-                    strides=output_strides,
-                    writeable=False
-                )
-
-                if split_name == 'train':
-                    x_train.extend(inputs)
-                    y_train.extend(outputs)
-                elif split_name == 'val':
-                    x_val.extend(inputs)
-                    y_val.extend(outputs)
-                elif split_name == 'test':
-                    x_test.extend(inputs)
-                    y_test.extend(outputs)
-
-        self.x_train = np.array(x_train)
-        self.y_train = np.array(y_train)
-        self.x_val = np.array(x_val)
-        self.y_val = np.array(y_val)
-        self.x_test = np.array(x_test)
-        self.y_test = np.array(y_test)
-
-        print("Sequences created for training, validation, and testing.")
-
-    def get_tensors(self):
-        self.x_train_tensor = torch.tensor(self.x_train, dtype=torch.float32)
-        self.y_train_tensor = torch.tensor(self.y_train, dtype=torch.float32)
-        self.x_val_tensor = torch.tensor(self.x_val, dtype=torch.float32)
-        self.y_val_tensor = torch.tensor(self.y_val, dtype=torch.float32)
-        self.x_test_tensor = torch.tensor(self.x_test, dtype=torch.float32)
-        self.y_test_tensor = torch.tensor(self.y_test, dtype=torch.float32)
-
-        print("Data converted to PyTorch tensors.")
-
-    def get_loaders(self, batch_size):
-        train_dataset = data_utils.TensorDataset(self.x_train_tensor, self.y_train_tensor)
-        val_dataset = data_utils.TensorDataset(self.x_val_tensor, self.y_val_tensor)
-        test_dataset = data_utils.TensorDataset(self.x_test_tensor, self.y_test_tensor)
-        train_loader = data_utils.DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-        val_loader = data_utils.DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
-        test_loader = data_utils.DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+    def get_loaders(self, batch_size: int):
+        train_loader = data_utils.DataLoader(self.train_dataset, batch_size=batch_size, shuffle=True)
+        val_loader = data_utils.DataLoader(self.val_dataset, batch_size=batch_size, shuffle=False)
+        test_loader = data_utils.DataLoader(self.test_dataset, batch_size=batch_size, shuffle=False)
 
         return train_loader, val_loader, test_loader
