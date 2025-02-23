@@ -28,7 +28,6 @@ class Preprocessor:
         data['date'] = pd.to_datetime(data['started_at'], errors='coerce').dt.date
         data.rename(columns={'start_station_id': 'station_id', 'start_lat': 'latitude', 'start_lng': 'longitude'},
                     inplace=True)
-        print(f'Empty values: {data.isna().sum()}')
         data.dropna(inplace=True)
 
         # Standardize coordinates
